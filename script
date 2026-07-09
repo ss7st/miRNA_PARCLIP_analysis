@@ -1,0 +1,553 @@
+---
+title: "Therapeutic delivery of microRNAs discovered to target deregulated glioblastoma pathways inhibits tumor growth in mice"
+author: "Saha et al."
+date: "2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r tinytex, include=FALSE, results = "hide",warning=FALSE}
+## INSTALLING LATEX FOR RMARKDOWN
+
+#RMarkdown requires LaTex to create pdf documents as an output. More information can be found [here](https://bookdown.org/yihui/rmarkdown/pdf-document.html). Alternatively, output can be set to "html_document" or "word_document". End users may install LaTex by setting the "wanttinytex" variable to FALSE and running the following script:
+
+#Install tinytex to let RMarkdown create a pdf document? Default: wanttinytex <- FALSE
+wanttinytex <- FALSE
+
+if(tinytex:::is_tinytex()==FALSE && wanttinytex == TRUE){
+if (!require("tinytex")) install.packages("tinytex")
+tinytex::install_tinytex()
+}
+```
+
+
+```{r parameters}
+#What is the name of the folder that you would like to put all results in? 
+#Default: outputdir <- "Outputs"
+outputdir <- "parclip_output"
+#Analyze AGO1 data?
+ago1 <- TRUE
+#Analyze AGO2 data?
+ago2 <- TRUE
+#Analyze AGO3 data?
+ago3 <- TRUE
+#Set TCGA fold change p-value cutoff. Default: tcga.fdr <- 0.01
+tcga.fdr <- 0.05
+#use FCfilter and cox.cutoff variables? Default: usefilter <- TRUE
+usefilter <- TRUE
+#Set TCGA fold change cutoff. Default is log2FC = 0.585, or 1.5 Default: tcga.fdr <- 0.585
+FCfilter <- 1
+#Set cox coefficient cutoff. Default: cox.cutoff <- 0.3
+cox.cutoff <- 0.3
+#Set miRNA score difference threshold
+miRdiff <- 0.25
+#Overwrite contents of the output directory? Default: deleteoutputs <- FALSE
+deleteoutputs <- TRUE
+#Re-analyze PAR-CLIP data or use intermediate file? Default: useintermediate <- TRUE
+useintermediate <- TRUE
+```
+
+## Setup
+
+This initializes all programs that will be used for the analysis.  This program will also auto-install any required packages that are not already installed. Lastly, this section outlines the parameters for knitr files. Most of the analysis is performed using the Tidyverse family of packages.  More information can be found at [tidyverse.org/packages](tidyverse.org/packages).  The readxl and xlsx packages are used for reading and writing .xlsx Excel workbooks, respectively.  
+
+```{r setup, message=FALSE, results = "hide",warning=FALSE}
+if (!require("tidyverse")) install.packages("tidyverse")
+library("tidyverse")
+if (!require("readxl")) install.packages("readxl")
+library("readxl")
+if (!require("writexl")) install.packages("writexl")
+library("writexl")
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, results = "hide",warning=FALSE)
+```
+
+## Debug
+
+The debug chunk will prevent the script from running if any of the dependent variables for this analysis do not exist.  This should prevent the program from erroring out after a long runtime without producing any results due to a missing variable.  If modifying the input .csv and .xlsx files, it is important to leave all header information and column names intact, as the program uses this information to extract relevant data.  Columns are intuitively labeled to end user convenience.
+
+```{r debug}
+if (dir.exists(outputdir) && deleteoutputs == FALSE ){
+  stop("Your output directory already exists!  Please delete/move 
+       this folder from your working directory.  Alternatively, you 
+       can set 'deleteoutputs' to TRUE to auto-delete this folder 
+       for every run. You may also choose an alternative output 
+       directory.")
+}else{
+  unlink(outputdir,recursive = TRUE)
+}
+
+if (!exists("outputdir")){
+stop("outputdir variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!exists("ago1")){
+stop("ago1 variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!exists("ago2")){
+stop("ago2 variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!exists("ago3")){
+stop("ago3 variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!exists("tcga.fdr")){
+stop("tcga.fdr variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!exists("FCfilter")){
+stop("FCfilter variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!exists("cox.cutoff")){
+stop("cox.cutoff variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!exists("miRdiff")){
+stop("miRdiff variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!exists("deleteoutputs")){
+stop("deleteoutputs variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!exists("useintermediate")){
+stop("useintermediate variable is not defined.  Please ensure that all 
+     parameters in the r parameters chunk are defined.")
+}
+
+if (!file.exists("intermediate-parclip-new.RData") && useintermediate == FALSE){
+  stop("intermediate-parclip.RData does not exist.  Please include 
+       ithe intermediate PAR-CLIP data using this file name and format.
+       Alternatively, set useintermediate to FALSE.")}
+
+if (!file.exists("mirna-seeds.csv")){
+  stop("mirna-seeds.csv does not exist.  Please include 
+       input mirna seed sequence data using this file name and format.")
+}
+
+if (!file.exists("ago1.clusters.csv") && ago1 == TRUE){
+  stop("ago1.clusters.csv does not exist.  Please include input 
+       AGO1 PAR-CLiP cluster data using this file name and format.")
+}
+
+if (!file.exists("ago2.clusters.csv") && ago2 == TRUE){
+  stop("ago2.clusters.csv does not exist.  Please include input
+       AGO2 PAR-CLiP cluster data using this file name and format.")
+}
+
+if (!file.exists("ago3.clusters.csv") && ago3 == TRUE){
+  stop("ago3.clusters.csv does not exist.  Please include input
+       AGO3 PAR-CLiP cluster data using this file name and format.")
+}
+
+if (!file.exists("fpkm.csv")){
+  stop("fpkm.csv does not exist.  Please include
+       input Gene expression data (in FPKM, RPKM, or TPM format)
+       using this file name and format.")
+}
+
+if (!file.exists("tcga-rnaseq-tvn.csv")){
+  stop("tcga-rnaseq-tvn.csv does not exist.  Please include input 
+       Gene expression data (in DESEq2 output format) 
+       using this file name and format.")
+}
+
+if (!file.exists("mrna-from-oncolnc.xlsx")){
+  stop("mrna-from-oncolnc.xlsx does not exist.  Please include input 
+       patient survival data (in oncolnc.org format) 
+       using this file name and format.")
+}
+
+if (!file.exists("annotated_genelist_onctsg.csv")){
+  stop("annotated_genelist_onctsg.csv does not exist.  Please include input 
+       gene annotation using this file name and format.")
+}
+
+if (!dir.exists(outputdir)){dir.create(outputdir)}
+```
+
+## Reading in PAR-CLIP data and assigning predicted miRs
+
+The PAR-CLIP pull down method was combined with next gen sequencing to identify.
+
+```{r parclip targets}
+if(useintermediate == FALSE){
+# read in miRNA seed information
+mirnas <- read_csv("mirna-seeds.csv")
+
+# Function to read and process PARCLIP data from Markus. Only imports chr,
+# strand, start, end, annotation, gene name, cluster id, cluster sequence, and #
+# reads. Filters out anything that isn't UTR or coding, and filters out hits on
+# unplaced contigs (things that don't start with a named chromosome)
+
+read_parclip <- function(geneclfile) {
+clustfile <- read_csv(geneclfile, skip=1, col_types="cciicc_cci_______________",
+col_names=c("chr", "strand", "start", "end", "annot", "target", 
+            "clust", "clustseq", "reads")) %>%
+filter(annot %in% c("3'utr", "coding")) %>%
+filter(grepl("^chr", chr)) %>%
+mutate(TtoC = round(nchar(clustseq)/2),1)
+
+clustfile$realclust <- substr(clustfile$clustseq, clustfile$TtoC-1, clustfile$TtoC+10)
+clustfile
+}
+
+# Function to join PARCLIP data to mirna data Does a full cartesian product
+# full-join then filters individual rows based on partial match.
+# See http://stackoverflow.com/a/32915578/654296 for details on how this works
+
+join_parclip_to_mirnas <- function(parclipdata, mirnadata) {
+parclipdata %>%
+mutate(i=1) %>%
+full_join(mutate(mirnadata, i=1), by="i") %>%
+select(-i) %>%
+filter(stringr::str_detect(realclust, revcomp)) %>%
+distinct()
+}
+
+# Import PARCLIP data and join to miRNAs
+# load("intermediate.RData")
+
+if(ago1 == TRUE){
+  pc1 <- read_parclip("ago1.clusters.csv")
+  pc1 <- join_parclip_to_mirnas(pc1, mirnas)
+  write_csv(pc1,paste(outputdir,"/parclip_mirna_ago1.csv",sep = ""))
+}
+
+if(ago2 == TRUE){
+  pc2 <- read_parclip("ago2.clusters.csv")
+  pc2 <- join_parclip_to_mirnas(pc2, mirnas)
+  write_csv(pc2,paste(outputdir,"/parclip_mirna_ago2.csv",sep = ""))
+}
+
+if(ago3 == TRUE){
+  pc3 <- read_parclip("ago3.clusters.csv")
+  pc3 <- join_parclip_to_mirnas(pc3, mirnas)
+write_csv(pc3,paste(outputdir,"/parclip_mirna_ago3.csv",sep = ""))
+}
+
+if(ago1 == TRUE & ago2 == TRUE & ago3 == TRUE){
+  save(pc1, pc2, pc3, file = "intermediate-parclip-new.RData")
+}
+
+}else{
+  load("intermediate-parclip-new.RData")
+  
+if(ago1 == TRUE){
+  write_csv(pc1,paste(outputdir,"/parclip_mirna_ago1.csv",sep = ""))
+}
+
+if(ago2 == TRUE){
+  write_csv(pc2,paste(outputdir,"/parclip_mirna_ago2.csv",sep = ""))
+}
+
+if(ago3 == TRUE){
+  write_csv(pc3,paste(outputdir,"/parclip_mirna_ago3.csv",sep = ""))
+}
+}
+```
+
+## Reading in processed TCGA data
+
+We read in all data, but then filter for only consistent genes that have a FC pvalue <= 0.01.  We also rename the columns for downstream consistency.
+
+```{r tvn}
+tvn <- read_csv("tcga-rnaseq-tvn.csv")
+tvn <- tvn %>%
+mutate(logFC = ifelse(log2FoldChange>=0,2^(abs(log2FoldChange)),-(2^(abs(log2FoldChange))))) %>%
+arrange(desc(logFC)) %>%
+select(target=GeneId, log2FC.tvn=log2FoldChange, logFC.tvn=logFC, p.tvn=pvalue, fdr.tvn=padj) %>%
+filter(fdr.tvn <= tcga.fdr)
+```
+
+## Reading in oncolnc survival data
+
+You can also embed plots, for example:
+
+```{r srv}
+srv <- readxl::read_excel("mrna-from-oncolnc.xlsx")
+srv <- srv %>%
+select(target=`TCGA Name`, logHR.srv=`Cox coefficient`, p.srv=`Raw p-value`, fdr.srv=`BH-adjusted p-value`) %>%
+arrange(p.srv)
+```
+
+## Reading in absolute expression data for GBM mRNA
+
+You can also embed plots, for example:
+
+```{r expr}
+expr <- read_csv("fpkm.csv", col_types="cn")
+
+missingFPKMs <- expr[!complete.cases(expr),]
+missingFPKMs <- missingFPKMs %>% select(target=Gene, expr=FPKM)
+
+expr <- expr[complete.cases(expr),]
+expr <- expr %>%
+select(target=Gene, expr=FPKM) %>%
+group_by(target) %>%
+mutate(FPKMmax = max(expr,na.rm = TRUE)) %>%
+distinct(target,FPKMmax) %>%
+select(target, expr=FPKMmax)
+
+missingFPKMs <- inner_join(missingFPKMs,expr, by = "target")
+```
+
+## Join mRNA target information
+
+We use the following code to compile TCGA fold change and absolute expression data with the survival data from oncolnc.  We then annotate the data using multiple resources.  The final table will only include genes that are greater than 2-fold deregulated and consistent based on their annotated role, meaning the following:
+
+Oncogenes will have a positive fold change, negative correlation with survival, and the oncogene annotation.
+
+Tumor suppressors will have a negative fold change, positive correlation with survival, and the tumor suppressor annotation.
+
+```{r join}
+
+annot <-  read.csv("annotated_genelist_onctsg.csv") %>%
+distinct(target, role)
+
+tvnexp <- left_join(tvn, expr, by="target")
+tvnsrv <- left_join(tvnexp, srv, by="target") %>%
+left_join(annot, by="target") 
+
+```
+
+#Annotate target genes and filter out genes that do not meet thresholds
+
+```{r filter genes}
+
+if(usefilter == TRUE){
+tvnonc <- tvnsrv %>%
+  filter(log2FC.tvn >= FCfilter & logHR.srv >= -cox.cutoff & role=="ONC")
+tvntsg <- tvnsrv %>%
+  filter(log2FC.tvn <= -FCfilter & logHR.srv <= cox.cutoff & role=="TSG")
+tvnsrv <- rbind(tvnonc,tvntsg)
+
+}else{
+tvnonc <- tvnsrv %>%
+  filter(role=="ONC")
+tvntsg <- tvnsrv %>%
+  filter(role=="TSG")
+tvnsrv <- rbind(tvnonc,tvntsg)  
+}
+
+write_csv(tvnsrv,paste(outputdir,"/candidategenes.csv",sep = ""))
+```
+
+#Integrate list of important genes with list of miRNA targets
+
+```{r integrate}
+if(ago1 == TRUE){
+pc1 <- read_csv(paste(outputdir,"/parclip_mirna_ago1.csv",sep = ""))
+pc1i <- pc1 %>%
+  inner_join(tvnsrv, by="target") %>%
+  na.omit()
+}
+
+if(ago2 == TRUE){
+pc2 <- read_csv(paste(outputdir,"/parclip_mirna_ago2.csv",sep = "")) 
+pc2i <- pc2 %>%
+  inner_join(tvnsrv, by="target") %>%
+  na.omit()
+}
+
+if(ago3 == TRUE){
+pc3 <- read_csv(paste(outputdir,"/parclip_mirna_ago3.csv",sep = ""))
+pc3i <- pc3 %>%
+  inner_join(tvnsrv, by="target") %>%
+  na.omit()
+}
+```
+
+#Score miRNA targets
+
+```{r genescore}
+if(ago1 == TRUE){
+genescores.ago1 <- pc1i %>%
+distinct() %>%
+#mutate(score.tvn=-1*log10(p.tvn)*sign(logFC.tvn)) %>%
+#mutate(score.expr=-1*log10(p.expr)*sign(logHR.expr)) %>%
+#mutate_at(vars(starts_with("score")), . %>% scale %>% as.vector) %>%
+#mutate(score.sum=score.tvn+score.expr) %>%
+#mutate(score.abs=abs(score.tvn)+abs(score.expr)) %>%
+#mutate(direction = ifelse(sign(score.tvn*score.expr)>0, "consistent", "inconsistent")) #%>%
+mutate(pscore.tvn = percent_rank(abs(log2FC.tvn))) %>%
+mutate(pscore.expr = percent_rank(expr)) %>%
+mutate(pscore.sum= pscore.tvn+pscore.expr) %>%
+select(mirna,target,log2FC.tvn,fdr.tvn,expr,logHR.srv,role,pscore.tvn,pscore.expr,pscore.sum) %>%
+arrange(desc(pscore.sum)) %>%
+write_csv(paste(outputdir,"/genescores_AGO1.csv",sep = ""))
+}
+
+if(ago2 == TRUE){
+genescores.ago2 <- pc2i %>%
+distinct() %>%
+mutate(pscore.tvn = percent_rank(abs(log2FC.tvn))) %>%
+mutate(pscore.expr = percent_rank(expr)) %>%
+mutate(pscore.sum= pscore.tvn+pscore.expr) %>%
+select(mirna,target,log2FC.tvn,fdr.tvn,expr,logHR.srv,role,pscore.tvn,pscore.expr,pscore.sum) %>%
+arrange(desc(pscore.sum)) %>%
+write_csv(paste(outputdir,"/genescores_AGO2.csv",sep = ""))
+}
+
+if(ago3 == TRUE){
+genescores.ago3 <- pc3i %>%
+distinct() %>%
+mutate(pscore.tvn = percent_rank(abs(log2FC.tvn))) %>%
+mutate(pscore.expr = percent_rank(expr)) %>%
+mutate(pscore.sum= pscore.tvn+pscore.expr) %>%
+select(mirna,target,log2FC.tvn,fdr.tvn,expr,logHR.srv,role,pscore.tvn,pscore.expr,pscore.sum) %>%
+arrange(desc(pscore.sum)) %>%
+write_csv(paste(outputdir,"/genescores_AGO3.csv",sep = ""))
+}
+```
+
+#Score miRNAs and sort by predicted miRNA role
+
+```{r miRNAscore}
+#We start by taking the integrated score table and splitting it up into two tables
+# Function to create the tibble with the real, actual, non-permuted results
+# Table contains the cumulative score for all genes of each type targeted by that mir.
+compute_cumscore <- function(mirtargets, targetscorerole) {
+mirtargets %>%
+inner_join(targetscorerole, by="target") %>%
+group_by(mirna, role) %>%
+mutate(pcumscore=sum(pscore.sum),ntargets=length(target),targetlist = as.character(list(target))) %>%
+ungroup() %>%
+complete(mirna, role, fill=list(cumscore=0)) %>%
+distinct(mirna,role,pcumscore,ntargets,targetlist)
+}
+
+if(ago1 == TRUE){
+#The first table (mt) is just mirs and their targets.
+integrated <- genescores.ago1
+
+mt <- integrated %>%
+distinct(mirna, target)
+#The second table (tsr) is the score and role for each gene.
+tsr <- integrated %>%
+distinct(target, pscore.sum, role)
+
+# Run the function to generate the actual cumulative scores for each mir/role combination
+cumscores <- compute_cumscore(mirtargets=mt, targetscorerole=tsr)
+cumscores$pcumscore[is.na(cumscores$pcumscore)] <- 0
+cumscores$ntargets[is.na(cumscores$ntargets)] <- 0
+
+
+cumscorestsg.ago1 <- cumscores %>%
+  filter(role == "ONC") %>%
+  arrange(desc(pcumscore))
+
+cumscoresonc.ago1 <- cumscores %>%
+  filter(role == "TSG") %>%
+  arrange(desc(pcumscore))
+
+write_xlsx(list(TumorSuppressor = cumscorestsg.ago1, Oncogene = cumscoresonc.ago1),paste(outputdir,"/ago1-mirna-scores.xlsx",sep = ""))
+}
+
+if(ago2 == TRUE){
+integrated <- genescores.ago2
+mt <- integrated %>%
+distinct(mirna, target)
+tsr <- integrated %>%
+distinct(target, pscore.sum, role) 
+cumscores <- compute_cumscore(mirtargets=mt, targetscorerole=tsr)
+cumscores$pcumscore[is.na(cumscores$pcumscore)] <- 0
+cumscores$ntargets[is.na(cumscores$ntargets)] <- 0
+
+cumscorestsg.ago2 <- cumscores %>%
+  filter(role == "ONC") %>%
+  arrange(desc(pcumscore))
+
+cumscoresonc.ago2 <- cumscores %>%
+  filter(role == "TSG") %>%
+  arrange(desc(pcumscore))
+
+write_xlsx(list(TumorSuppressor = cumscorestsg.ago2, Oncogene = cumscoresonc.ago2),paste(outputdir,"/ago2-mirna-scores.xlsx",sep = ""))
+}
+
+if(ago3 == TRUE){
+integrated <- genescores.ago3
+mt <- integrated %>%
+distinct(mirna, target)
+tsr <- integrated %>%
+distinct(target, pscore.sum, role) 
+cumscores <- compute_cumscore(mirtargets=mt, targetscorerole=tsr)
+cumscores$pcumscore[is.na(cumscores$pcumscore)] <- 0
+cumscores$ntargets[is.na(cumscores$ntargets)] <- 0
+
+cumscorestsg.ago3 <- cumscores %>%
+  filter(role == "ONC") %>%
+  arrange(desc(pcumscore))
+
+cumscoresonc.ago3 <- cumscores %>%
+  filter(role == "TSG") %>%
+  arrange(desc(pcumscore))
+
+write_xlsx(list(TumorSuppressor = cumscorestsg.ago3, Oncogene = cumscoresonc.ago3),paste(outputdir,"/ago3-mirna-scores.xlsx",sep = ""))
+}
+```
+
+#Score miRNAs and sort by predicted miRNA role
+
+```{r filtermiRs}
+if(ago1 == TRUE){
+cumscores.diff.ago1 <- left_join(cumscorestsg.ago1,cumscoresonc.ago1,by = "mirna") %>%
+  mutate(tsg_rank = percent_rank(pcumscore.x)) %>%
+  mutate(onc_rank = percent_rank(pcumscore.y)) %>%
+  mutate(scorediff = tsg_rank - onc_rank) %>%
+  mutate(filterrole = ifelse(scorediff >= miRdiff,"TSG",ifelse(scorediff <= -miRdiff,"ONC","No Role"))) %>%
+  select(mirna,tsg_score = pcumscore.x,tsg_rank,onc_score = pcumscore.y,onc_rank,scorediff,filterrole) %>%
+  arrange(desc(scorediff)) 
+}
+
+if(ago2 == TRUE){
+cumscores.diff.ago2 <- left_join(cumscorestsg.ago2,cumscoresonc.ago2,by = "mirna") %>%
+  mutate(tsg_rank = percent_rank(pcumscore.x)) %>%
+  mutate(onc_rank = percent_rank(pcumscore.y)) %>%
+  mutate(scorediff = tsg_rank - onc_rank) %>%
+  mutate(filterrole = ifelse(scorediff >= miRdiff,"TSG",ifelse(scorediff <= -miRdiff,"ONC","No Role"))) %>%
+  select(mirna,tsg_score = pcumscore.x,tsg_rank,onc_score = pcumscore.y,onc_rank,scorediff,filterrole) %>%
+  arrange(desc(scorediff))
+}
+
+if(ago3 == TRUE){
+cumscores.diff.ago3 <- left_join(cumscorestsg.ago3,cumscoresonc.ago3,by = "mirna") %>%
+  mutate(tsg_rank = percent_rank(pcumscore.x)) %>%
+  mutate(onc_rank = percent_rank(pcumscore.y)) %>%
+  mutate(scorediff = tsg_rank - onc_rank) %>%
+  mutate(filterrole = ifelse(scorediff >= miRdiff,"TSG",ifelse(scorediff <= -miRdiff,"ONC","No Role"))) %>%
+  select(mirna,tsg_score = pcumscore.x,tsg_rank,onc_score = pcumscore.y,onc_rank,scorediff,filterrole) %>%
+  arrange(desc(scorediff)) 
+}
+
+if(ago1 == TRUE && ago2 == TRUE && ago3 == TRUE){
+  write_xlsx(list(ago1 = cumscores.diff.ago1, ago2 = cumscores.diff.ago2, ago3 = cumscores.diff.ago3),
+          paste(outputdir,"/filterrank-mirna-scores.xlsx",sep = ""))
+  }else{
+  if(ago1 == TRUE ){
+  write_csv(cumscores.diff.ago1,paste(outputdir,"/filterrank-mirna-scores-AGO1.csv",sep = ""))}
+  if(ago2 == TRUE ){
+  write_csv(cumscores.diff.ago2,paste(outputdir,"/filterrank-mirna-scores-AGO2.csv",sep = ""))}
+  if(ago3 == TRUE ){
+  write_csv(cumscores.diff.ago3,paste(outputdir,"/filterrank-mirna-scores-AGO3.csv",sep = ""))}
+  }
+```
+
+```{r}
+# Session Information
+sessionInfo()
+```
+
